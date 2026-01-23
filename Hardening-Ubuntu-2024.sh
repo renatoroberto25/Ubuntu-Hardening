@@ -1,6 +1,6 @@
 #!/bin/bash
 # CIS Hardening Script - Modular Version (Corrected)
-
+# Version 2026-01-22-1.0.1
 # Global Variables
 LOG_DIR="/home/$SUDO_USER/setup_logs/hardening.log"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -28,17 +28,18 @@ run_command() {
     local cmd="$1"
     local desc="$2"
     
-    echo "  EXEC: $desc" >> "$LOG_DIR/section_logs/$CURRENT_SECTION/details.log"
-    if eval "$cmd" >> "$LOG_DIR/section_logs/$CURRENT_SECTION/details.log" 2>&1; then
-        log_success "$desc"
+    echo "Executing: $desc"
+    if ! output=$(eval "$cmd" 2>&1); then
+        log_error "Failed to execute '$cmd': $output"
     else
-        log_error "$desc"
+        log_success "$desc"
+        echo -e "\n$output\n" >> "$LOG_DIR/section_logs/$CURRENT_SECTION.log"
     fi
 }
 
 # ===============[ SECTION 1: Initial Setup ]===============
 start_section "1.1"
-run_command "apt purge -y cramfs freevxfs hfs hfsplus overlayfs squashfs udf jffs2 usb-storage" "1.1.1 Remove unnecessary filesystems"
+run_command 'for pkg in cramfs freevxfs hfs hfsplus overlayfs squashfs udf jffs2 usb-storage; do dpkg -l $pkg >/dev/null 2>&1 && apt purge -y $pkg || true; done' "1.1.1 Remove unnecessary filesystems"
 run_command "systemctl mask autofs" "1.1.2 Disable autofs service"
 
 start_section "1.2"
@@ -48,10 +49,10 @@ run_command "chmod og-rwx /boot/grub/grub.cfg" "1.2.3 Set grub.cfg permissions"
 
 start_section "1.3"
 run_command "apt install -y apparmor-utils apparmor-profiles apparmor-profiles-extra" "1.3.1 Install AppArmor"
-run_command "echo "Enabling in Enforce all AppArmor profiles"" "1.3.2 Set AppArmor profiles to complain mode"
+run_command "echo 'Enabling in Complain all AppArmor profiles'" "1.3.2 Set AppArmor profiles to complain mode"
 for profile in /etc/apparmor.d/*; do
   if grep -q '^profile ' "$profile"; then
-    aa-complain "$profile"
+    run_command "aa-complain \"$profile\" >/dev/null 2>&1" "Complain mode for $profile"
   fi
 done
 run_command 'echo "kernel.randomize_va_space = 2" > /etc/sysctl.d/60-aslr.conf' "1.3.3 Enable ASLR"
@@ -171,7 +172,7 @@ run_command "ufw --force enable" "4.1.2 Enable UFW"
 run_command "ufw allow in on lo" "4.1.3 Allow loopback inbound"
 run_command "ufw allow out on lo" "4.1.4 Allow loopback outbound"
 run_command "ufw deny in from 127.0.0.0/8" "4.1.5 Block external loopback"
-run_command "ufw allow in from 192.168.10.2/24" "4.1.5 Allow internal network"
+run_command "ufw allow in from 192.168.10.0/24" "4.1.5 Allow internal network"
 run_command "ufw default deny incoming" "4.1.6 Default deny incoming"
 run_command "ufw default allow outgoing" "4.1.7 Default allow outgoing"
 run_command "ufw deny in from ::1" "4.1.8 Block IPv6 loopback"
@@ -207,6 +208,8 @@ DisableForwarding yes
 GSSAPIAuthentication no
 HostbasedAuthentication no
 IgnoreRhosts yes
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
 KexAlgorithms -diffie-hellman-group1-sha1,diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1
 MACs -hmac-md5,hmac-md5-96,hmac-ripemd160,hmac-sha1-96,umac-64@openssh.com,hmac-md5-etm@openssh.com,hmac-md5-96-etm@openssh.com,hmac-ripemd160-etm@openssh.com,hmac-sha1-96-etm@openssh.com,umac-64-etm@openssh.com,umac-128-etm@openssh.com
 PermitUserEnvironment no
@@ -244,12 +247,11 @@ run_command 'echo "umask 027" >> /etc/bash.bashrc' "5.4.4 Set bash default umask
 run_command 'echo "umask 027" >> /root/.bash_profile' "5.4.4 Set bash default root umask"
 run_command 'echo "umask 027" >> /root/.bashrc' "5.4.4 Set bash default root umask"
 
-run_command 'awk -F: '\''($2 == "" ) { print $1 " does not have a password" }'\'' /etc/shadow | tee /var/log/empty_passwords.log' "5.5.1 Audit empty passwords"
+run_command "awk -F: '(\$2 == \"\") { print \$1 }' /etc/shadow | xargs -r -n 1 passwd -l" "5.5.6 Lock empty password accounts"
 run_command 'grep "^+:" /etc/passwd | tee /var/log/legacy_passwd_entries.log' "5.5.2 Audit legacy NIS entries"
 run_command 'awk -F: '\''($3 == 0) { print $1 }'\'' /etc/passwd | grep -v "^root$" | tee /var/log/uid0_accounts.log' "5.5.3 Audit duplicate UID 0 accounts"
 run_command 'awk -F: '$3=="0"{print $1":"$3}' /etc/group" | tee /var/log/gid0_accounts.log' "5.5.4 Audit duplicate UID 0 accounts"
 run_command 'awk -F: '\''($3 == 0) { print $1 }'\'' /etc/passwd | grep -v "^root$" | tee /var/log/uid0_accounts.log' "5.5.5 Audit duplicate UID 0 accounts"
-run_command 'awk -F: '($2 == "") { print $1 }' /etc/shadow | xargs -n 1 passwd -l' "5.5.6 Lock empty password accounts"
 
 
 
@@ -400,8 +402,8 @@ run_command 'systemctl restart systemd-journald' "6.3.2 Restart journald"
 start_section "6.4"
 
 # 6.4.1 - Enable process accounting
-run_command 'apt install -y acct' "6.4.1 Install process accounting"
-run_command 'systemctl --now enable psacct' "6.4.1 Enable process accounting"
+run_command 'apt install -y acct' "6.4.1 nstall process accounting"
+run_command 'systemctl enable acct' "6.4.1 Enable process accounting"
 
 # 6.4.2 - Configure auditd process tracking
 run_command 'echo "-w /usr/bin/ -p x -k processes" >> /etc/audit/rules.d/50-processes.rules' "6.4.2 Monitor binary execution"
