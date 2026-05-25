@@ -7,7 +7,7 @@ Vagrant.configure("2") do |config|
   VM_USER  = "renato"
   VM_PASS  = "C9p5au8naa@2025"
 
-  config.vm.box      = "gusztavvargadr/ubuntu-desktop-2404-lts"
+  config.vm.box      = "caspermeijn/ubuntu-desktop-24.04"
   config.vm.hostname = VM_NAME
 
   config.vm.network "private_network", ip: VM_IP
