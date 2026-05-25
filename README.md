@@ -1,8 +1,12 @@
 
 # Ubuntu-Hardening
-# 🔒 Ubuntu 24.04 Hardening Script (CIS Level 1 - Modular)
+# 🔒 Ubuntu 24.04 Hardening Scripts (CIS Level 1 - Modular)
 
-This project provides an automated Bash script to harden Ubuntu 24.04 LTS systems based on the **CIS Benchmark Level 1 - Server Profile**. The script is modular, logs every section and command, and enforces security best practices from the ground up.
+This project provides automated Bash scripts to harden Ubuntu 24.04 LTS systems:
+- **`Hardening-Ubuntu-2024.sh`** - CIS Level 1 Server Profile (headless, minimal services)
+- **`Hardening-Ubuntu-2024-VDI-Desktop.sh`** - Enhanced VDI Desktop Profile (GUI, centralized auth, dev tools)
+
+Both scripts are modular, log every section with success/error tracking, and enforce security best practices from the ground up.
 
 ---
 
