@@ -1,0 +1,97 @@
+ID	Tópico	Descrição
+101	 Realmd + SSSD 	 Identidade centralizada via AD; bloqueia autenticação local fora de controle 
+102	 Restrição login por grupo 	 Apenas usuários aprovados podem fazer login (sssd access_provider) 
+103	 Root sem login local 	 Shell do root bloqueada (/bin/nologin ou locked password) 
+104	 Root sem login SSH 	 PermitRootLogin=no em sshd_config 
+105	 Sem usuários compartilhados 	 Apenas 1 conta UID >= 1000 por usuário; evita persistência 
+106	 UID 0 exclusivo ao root 	 Apenas 1 conta com UID 0; impede múltiplas identidades privilegiadas 
+107	 sudo restrito a grupo 	 Apenas membros do grupo `sudo` podem usar sudo 
+108	 sudo sem ALL=(ALL) ALL 	 Regras explícitas; não permissão irrestrita 
+109	 su restrito com pam_wheel 	 Apenas operadores aprovados podem fazer `su` 
+110	 Fora de grupo wheel 	 Remove caminho padrão de escalada administrativa 
+201	 ~/.ssh permissões 700/600 	 SSH keys não lidas por outros usuários; auditado 
+202	 ~/.aws permissões 700/600 	 AWS credentials isoladas; apenas usuário root pode ler 
+203	 Audit ~/.ssh/authorized_keys changes 	 Detecta SSH key injection 
+204	 Audit ~/.aws/credentials changes 	 Detecta tampering de credenciais AWS 
+205	 ~/.git-credentials protegido 	 Usar credential helper; nunca plain-text tokens 
+206	 ~/.netrc não existir 	 Se existir, máximo 600; credenciais de FTP/SMTP isoladas 
+207	 Audit ~/.bashrc/.bash_profile changes 	 Detecta malware injetado em shell initialization 
+208	 Audit .zshrc/.zsh_profile changes 	 Para usuários com zsh; detecta hijacking de PATH/alias 
+301	 Docker sem --privileged 	 Disable privileged containers by default no daemon 
+302	 Docker sem shared PID namespace 	 Impedir acesso a processos de outro container 
+303	 Docker device whitelist 	 Restringir acesso a dispositivos específicos via device-cgroup-rule 
+304	 AppArmor profile para Docker 	 Enforce MAC mesmo em containers 
+305	 Audit docker exec commands 	 Rastrear execução interativa dentro de containers 
+306	 Audit /var/lib/docker filesystem 	 Detectar tamper em imagens/layers 
+401	 Audit ~/.local/lib site-packages (Python) 	 Detecta dependências maliciosas em pip install --user 
+402	 Audit ~/.m2 maven repository (Java) 	 Detecta artefatos maliciosos em maven local cache 
+403	 Audit npm node_modules install 	 Detecta dependências maliciosas em npm install 
+404	 Sem pip system-wide global 	 Apenas virtualenv/user installs; evita poluição de PATH 
+501	 /tmp com noexec,nodev,nosuid 	 Evita código malicioso em /tmp 
+502	 /var/tmp com noexec,nodev,nosuid 	 Mesmo que /tmp; caminho alternativo de payload 
+503	 /dev/shm com noexec,nodev,nosuid 	 Impede exec via memória compartilhada 
+504	 Sticky bit em dirs públicos 	 Evita race conditions em /tmp /var/tmp 
+505	 ~/ encryption com LUKS 	 Home criptografada; impede cópia offline 
+506	 ~/.local/ permissões 700 	 Cache e dados locais isolados 
+507	 ~/.cache/ permissões 700 	 Cache de aplicações isolado 
+508	 Disable swap ou encrypt swap 	 Evita credenciais em dump de memória 
+509	 Disable core dumps 	 fs.suid_dumpable=0; impede coleta de dumps privilegiados 
+510	 Disable ptrace para usuários comuns 	 kernel.yama.ptrace_scope >= 1 
+601	 IP forwarding desabilitado 	 net.ipv4.ip_forward=0; impede pivot como roteador 
+602	 Redirects desabilitados 	 accept_redirects=0; evita MITM 
+603	 Source route desabilitado 	 accept_source_route=0; bloqueia spoofing 
+604	 rp_filter ativo 	 net.ipv4.conf.all.rp_filter=1; reduz IP spoofing 
+605	 Firewall local ativo 	 ufw enable; controla egress 
+606	 UFW egress default DENY 	 Whitelist apenas saída necessária (443 para AWS/Docker/Maven) 
+607	 Audit conexões outbound para IPs privados 	 Detecta movimentação lateral 
+608	 Audit conexões para ports > 1024 não-whitelisted 	 Detecta tunelamento/exfiltração 
+609	 TCP syncookies ativo 	 net.ipv4.tcp_syncookies=1; proteção SYN flood 
+701	 Cron desabilitado para usuários comuns 	 Apenas root pode usar cron; evita job injection 
+702	 at/batch desabilitado para usuários comuns 	 Apenas root pode agendar jobs diferidos 
+703	 Audit su attempts 	 Detecta tentativa direta de escalação 
+704	 sudo requer password 	 Mesmo que sudo já esteja configurado; nenhuma exceção 
+705	 Resource limits (/etc/security/limits.conf) 	 nproc, nofile limits por usuário; evita DoS local 
+706	 ulimit enforced no login 	 Fork bomb mitigation; max processes = reasonable value 
+801	 Audit /etc/ld.so.conf changes 	 Detecta tampering de library paths 
+802	 Audit /lib*/ld*.so.* 	 Detecta tampering de dynamic loader 
+803	 Audit /boot (ou /efi) 	 Detecta tampering de bootloader 
+804	 Immutable flag em /etc/audit/rules.d/ 	 Impede desabilitar audit em runtime 
+805	 Aslr ativo 	 kernel.randomize_va_space=2 
+806	 dmesg restrito 	 kernel.dmesg_restrict=1 
+807	 kptr restrito 	 kernel.kptr_restrict=2 
+901	 File integrity baseline ~/.ssh ~/.aws ~/.docker 	 AIDE/tripwire; alerta se credenciais alteradas 
+902	 Audit failed execve syscalls 	 Detecta tentativa de execução sem permissão 
+903	 Audit mmap PROT_EXEC em /tmp 	 Detecta shellcode injetado em /tmp 
+904	 Audit mmap PROT_EXEC na home 	 Menos comum; detecta execução dinâmica suspeita 
+905	 Audit open files em /etc/passwd /etc/shadow 	 Detecta enumeração de contas 
+906	 Audit module load/unload (insmod/rmmod) 	 Detecta LKM rootkits 
+907	 Audit syscalls críticos (setuid/setgid/socket/connect) 	 Rastreamento base de ações sensíveis 
+908	 Audit /etc/sudoers changes 	 Detecta modificação de política sudo 
+1001	 AppArmor ativo 	 Mandatory Access Control; enforcement de MAC 
+1002	 auditd ativo e persistente 	 Audit daemon iniciado em boot; logs persistidos 
+1003	 rsyslog ativo 	 Centralização de logs clássicos 
+1004	 journald ativo 	 Journal systemd para eventos OS 
+1005	 SSH ativo com PasswordAuthentication=no 	 Public key only; SSH key injection é vetor de acesso 
+1006	 AIDE configurado 	 File integrity tool; rodas a cada 30 dias 
+1007	 libpam-pwquality instalado 	 Validação de complexidade de senha (min 8 chars, 1 upper, 1 lower, 1 digit) 
+1008	 UFW instalado e ativo 	 Firewall application base 
+1009	 Sem serviços legados 	 Telnet, rsh, rlogin, tftp removidos 
+1010	 Sem serviços indevidos escutando 	 Nenhum listener em portas 21,23,25,80,389 etc 
+1101	 Bluetooth desabilitado 	 systemctl disable bluetooth 
+1102	 CUPS desabilitado 	 systemctl disable cups (serviço de impressão local) 
+1103	 avahi-daemon desabilitado 	 systemctl disable avahi-daemon (descoberta mDNS) 
+1104	 postfix desabilitado 	 systemctl disable postfix (SMTP relay local) 
+1105	 LDAP server ausente 	 openldap-servers não instalado 
+1106	 USB redirection desabilitado 	 Citrix policy ou kernel module disable 
+1201	 gcc/make instalados 	 Necessário para C++; sem sudo; sem headers dev extras 
+1202	 python runtime instalado 	 Python 3; sem pip global; apenas --user ou venv 
+1203	 Java JDK instalado 	 Necessário para Java; sem sudo em maven/gradle 
+1204	 Docker instalado com restrições 	 Sem --privileged, sem shared PID namespace 
+1205	 AWS CLI instalado 	 Sem credenciais long-lived; usar STS/temporary tokens 
+1206	 Sem credenciais cloud locais 	 ~/.aws/credentials não deve ter keys permanentes 
+1301	 Copy/paste restringido entre sessões 	 Citrix policy; evita lateral movement entre usuários 
+1302	 Clipboard sync desabilitado com host 	 Impede exfiltração via clipboard 
+1303	 Drive mapping local desabilitado 	 Impede acesso offline a files 
+1304	 Audit Citrix session events 	 Logins/logouts/idles rastreados 
+1305	 Session lock após 15min inatividade 	 Citrix policy + SO (ambos ativados) 
+1306	 Session lock até reauth 	 Proteção contra acesso desatendido 
