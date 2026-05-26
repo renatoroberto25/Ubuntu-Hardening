@@ -1,0 +1,112 @@
+ID;Tópico;Descrição
+101;AD/SSSD obrigatório;Login centralizado via AD/SSSD; contas locais de dev não são permitidas
+102;Login por grupo AD;Apenas grupos aprovados, como vdi-devs, podem iniciar sessão
+103;Conta break-glass controlada;Conta administrativa local somente para emergência, senha em cofre e uso auditado
+104;Root bloqueado;Conta root com senha bloqueada; sem login interativo direto
+105;Root sem SSH;PermitRootLogin=no quando SSH server estiver habilitado
+106;SSH por chave ou desabilitado;Se SSH for necessário, PasswordAuthentication=no; se não for necessário, serviço desabilitado
+107;Sem usuários compartilhados;Uma pessoa, uma conta; sem usuário genérico para desenvolvimento
+108;UID 0 exclusivo;Somente root pode ter UID 0
+109;Home por usuário;Home criada por usuário autenticado, com dono correto e permissão restritiva
+110;Bloqueio de sessão;Lock por inatividade via GNOME e política Citrix
+201;Devs sem sudo;Usuários dev não pertencem a sudo, admin ou wheel
+202;Sudo só suporte;Sudo restrito a grupo administrativo ou break-glass, com autenticação e auditoria
+203;Sem sudo irrestrito para dev;Nenhuma regra ALL=(ALL) ALL para grupos de desenvolvimento
+204;su restrito;su permitido somente para operadores autorizados
+205;pkexec/polkit restrito;Sem elevação gráfica para usuários dev
+206;Paths globais protegidos;Dev não escreve em /etc, /usr, /usr/local, /opt, /boot, /var
+207;PATH global limpo;PATH do sistema não inclui diretórios graváveis por usuário comum
+208;SUID/SGID monitorado;Binários SUID/SGID fora do baseline devem ser investigados
+209;umask restritivo;umask 027 definido no perfil do sistema (/etc/profile.d/) para que arquivos criados por usuários não fiquem com permissão aberta por padrão
+210;Limites de recursos por usuário;Definir limites de nproc, nofile e fsize via /etc/security/limits.conf ou systemd para evitar que um usuário degrade sessões de outros no VDI
+301;Python permitido;Python 3, venv e pipx disponíveis para uso sem root
+302;pip sem sudo;pip global e sudo pip proibidos; uso em venv, pipx ou escopo do usuário
+303;Java permitido;JDK aprovado instalado no SO; Maven/Gradle usam cache no home
+304;C/C++ permitido;gcc, g++ e make disponíveis quando build local for requisito do dev
+305;Build em workspace;Compilações e artefatos ficam em $HOME/workspace ou diretório equivalente
+306;Node opcional;Node/npm/yarn/pnpm somente se requerido, em escopo de usuário ou pacote aprovado
+307;IDEs sem root;IDEs e plugins rodam como usuário comum; sem instalação arbitrária como root
+308;Caches dev privados;~/.cache, ~/.local, ~/.m2, ~/.gradle, ~/.npm com dono do usuário e permissão restritiva
+309;Caches de IDE protegidos;Diretórios de configuração de IDEs como ~/.config/Code, ~/.config/JetBrains e ~/.local/share equivalentes devem ter permissão restritiva; tokens e credenciais armazenados por extensões devem ser gerenciados via credential helper e não em texto puro
+401;Docker rootless;Docker deve operar em modo rootless por usuário quando containers locais forem necessários
+402;Sem grupo docker rootful;Dev não entra no grupo docker associado ao daemon rootful
+403;Socket Docker rootful protegido;/var/run/docker.sock acessível apenas a root ou suporte autorizado
+404;Sem containers privilegiados;Containers privileged não são permitidos para usuários dev
+405;Sem host namespace por padrão;--pid=host, --network=host e equivalentes exigem exceção formal
+406;Sem bind mount sensível;Mount de /, /etc, /boot, /root, /var/run e caminhos críticos deve ser bloqueado ou alertado
+407;Storage rootless por usuário;Imagens, volumes e layers rootless ficam no escopo do usuário
+408;Registry aprovado;Preferir registry/proxy corporativo quando disponível
+409;Podman rootless aceito;Podman rootless é alternativa válida ao Docker rootless
+501;AWS CLI permitido;AWS CLI disponível para o usuário quando requerido
+502;Sem chaves permanentes AWS;Access keys long-lived em ~/.aws/credentials não são permitidas
+503;SSO/STS preferencial AWS;Usar AWS SSO, IAM Identity Center, federation ou STS temporário
+504;~/.aws protegido;~/.aws com 700; arquivos sensíveis com 600 e dono do usuário
+505;Azure CLI permitido;Azure CLI disponível para o usuário quando requerido; autenticação via az login com device flow ou Managed Identity; service principals em arquivo local não são permitidos
+506;~/.azure protegido;~/.azure com 700; arquivos de token e perfil com 600 e dono do usuário; sem client_secret em texto puro em qualquer arquivo de configuração
+507;Git credentials protegido;Evitar token em texto puro; usar credential helper aprovado
+508;~/.netrc restrito;Se existir, deve ser 600; uso deve ser excepcional
+509;SSH keys protegidas;~/.ssh 700; chaves privadas 600; authorized_keys auditado quando SSH existir
+510;Secrets fora do repo;Segredos não devem ser armazenados em repositórios de código
+511;Credenciais no home do dono;Credenciais de dev pertencem ao próprio usuário, não a root nem a contas compartilhadas
+601;/tmp protegido;/tmp com sticky bit; noexec/nodev/nosuid somente após teste de compatibilidade com Docker rootless e ferramentas de build que usam /tmp como diretório de trabalho; resultado do teste deve ser documentado antes de aplicar
+602;/var/tmp protegido;/var/tmp com sticky bit; noexec/nodev/nosuid somente após teste de compatibilidade
+603;/dev/shm protegido;/dev/shm com nodev/nosuid; noexec se não quebrar stack gráfica/dev
+604;Home privado;/home/$USER com 700 ou 750 conforme modelo de suporte
+605;~/.local privado;~/.local com permissão restritiva e dono correto
+606;~/.cache privado;~/.cache com permissão restritiva e dono correto
+607;Quota de usuário;Quota ou limite equivalente para evitar DoS local por consumo de disco
+608;Core dumps desabilitados;Core dumps desabilitados para evitar exposição de segredo e dados sensíveis
+609;Swap protegido;Swap desabilitado ou criptografado conforme padrão da imagem/VDI
+610;Criptografia da imagem;Criptografia tratada na camada VDI/hipervisor quando aplicável
+701;ASLR ativo;kernel.randomize_va_space=2
+702;ptrace restrito;kernel.yama.ptrace_scope >= 1
+703;dmesg restrito;kernel.dmesg_restrict=1
+704;kptr restrito;kernel.kptr_restrict=2
+705;Módulos não usados bloqueados;Bloquear protocolos/módulos legados não requeridos como dccp, sctp, rds, tipc e filesystems não usados como cramfs, freevxfs, jffs2, hfs, hfsplus, squashfs
+706;Load de módulo auditado;insmod, rmmod e modprobe devem ser auditados ou restritos
+707;BPF não privilegiado restrito;Desabilitar unprivileged BPF se compatível com o ambiente
+708;perf restrito;Restringir perf para usuários comuns se não for requisito de desenvolvimento
+801;Firewall local mínimo;Sem regra de egress no host por padrão; controle principal fica no firewall/proxy corporativo
+802;Inbound reduzido;Serviços escutando localmente devem ser mínimos; SSH somente se houver necessidade operacional
+803;DNS corporativo;DNS definido pela rede corporativa/VDI; evitar resolvedores externos diretos se política exigir
+804;IP forwarding off;net.ipv4.ip_forward=0
+805;Redirects off;accept_redirects e send_redirects desabilitados
+806;Source route off;accept_source_route desabilitado
+807;rp_filter ativo;rp_filter ativo conforme compatibilidade da rede VDI
+808;IPv6 decidido por arquitetura;IPv6 deve seguir o padrão corporativo; se desabilitado, fazê-lo via sysctl e não removendo módulo de kernel; não desabilitar sem validação de rede
+901;AppArmor padrão do Ubuntu;Preservar AppArmor instalado/ativo se já vier na imagem, sem exigir operação avançada de MAC
+902;Bluetooth off;Remover ou desabilitar Bluetooth se não houver necessidade
+903;Avahi off;Desabilitar mDNS/Avahi se não houver necessidade
+904;CUPS conforme política;Desabilitar CUPS local se impressão for controlada pelo Citrix
+905;Postfix off;Sem SMTP local
+906;Serviços legados removidos;Remover Telnet, rsh, rlogin, talk, tftp, ftp server e equivalentes
+907;USB storage controlado;Bloquear usb_storage no SO quando compatível; redirection principal é política Citrix
+908;Agente Citrix preservado;Hardening não deve quebrar VDA, Workspace, sessão gráfica ou políticas Citrix; serviços ctxvda, ctxhdx, ctxgfx e ctxlogd não devem ser interrompidos nem mascarados pelo script
+909;GNOME preservado;Desktop funcional; não remover stack gráfica necessária ao VDI
+1001;auditd ativo;auditd habilitado e persistente no boot
+1002;journald persistente;Journal persistente com limite de tamanho definido via SystemMaxUse e SystemKeepFree no journald.conf para evitar consumo excessivo de disco
+1003;rsyslog ativo;rsyslog ativo se usado pela companhia para coleta local/SIEM; encaminhamento para SIEM deve ser configurado com protocolo seguro (TLS) e retenção local mínima de 30 dias definida
+1004;Autenticação auditada;Logins, falhas, PAM, SSSD e eventos de sessão auditados
+1005;Sudo auditado;Uso administrativo auditado, mesmo que dev não tenha sudo
+1006;Alterações em /etc auditadas;passwd, shadow, sudoers, sshd, pam, sssd e apt sources monitorados
+1007;Shell init auditado;.bashrc, .profile, .bash_profile, .zshrc monitorados para persistência de usuário
+1008;authorized_keys auditado;authorized_keys monitorado quando SSH for permitido
+1009;Docker rootless observado;Registrar ou coletar eventos de containers rootless quando ferramenta corporativa suportar
+1010;Baixo ruído operacional;Auditoria deve priorizar eventos acionáveis e evitar tempestade de logs
+1101;Integridade por pacote;Confiar em dpkg/apt e fontes aprovadas para integridade básica do SO
+1102;Repos apt aprovados;Sources e keyrings controlados; sem PPA livre para dev
+1103;Atualizações gerenciadas;Atualizações via processo corporativo, imagem base ou unattended-upgrades se aprovado
+1104;Boot protegido;Permissões de /boot e GRUB protegidas; Secure Boot conforme suporte da plataforma
+1105;Sem AIDE obrigatório;AIDE não é requisito se não houver operação para tratar alertas
+1201;Clipboard Citrix;Controle de clipboard definido na camada Citrix
+1202;Drive mapping Citrix;Drive mapping local definido na camada Citrix
+1203;USB redirection Citrix;USB redirection controlado pela política Citrix
+1204;Session lock Citrix;Timeout e reautenticação definidos por Citrix e GNOME
+1205;File transfer Citrix;Transferência de arquivos controlada por Citrix/DLP quando aplicável
+1206;Auditoria de sessão;Eventos de sessão VDI coletados pela plataforma Citrix quando disponível
+1301;Script idempotente;Script deve poder rodar mais de uma vez sem duplicar configuração
+1302;Modo check;Script deve ter modo de validação ou checklist pós-execução
+1303;Snapshot antes de aplicar;Testes e produção devem usar snapshot/imagem reversível
+1304;Compatibilidade dev validada;Testar Python, Java, C/C++, Docker rootless, AWS CLI, Azure CLI, IDE e Citrix após hardening
+1305;Logs claros;Logs separados por seção, com falhas e ações manuais evidentes
+1306;Pós-check obrigatório;Validar: login AD funcional; dev sem sudo; SSH desabilitado ou por chave; auditd ativo; journald persistente; Docker rootless operacional; permissões de home corretas; ~/.aws e ~/.azure com 700; umask aplicado; limites de recursos ativos; serviços Citrix respondendo

@@ -1,0 +1,189 @@
+root@ubuntu-desktop-2404-vdi-20260525:/home/vagrant# ./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh 
+
+[09:35:39] SECTION 00-platform
+  [INFO] Detected Ubuntu 24.04.4 LTS
+
+[09:35:39] SECTION 01-apt
+  [INFO] Update apt metadata
+  [OK] Update apt metadata
+
+[09:35:51] SECTION 10-identidade
+  [INFO] Install SSSD/realmd packages
+
+
+  [OK] Install SSSD/realmd packages
+  [INFO] Enable SSSD if configured
+  [OK] Enable SSSD if configured
+  [INFO] Write /etc/sssd/sssd.conf.template
+  [OK] Wrote /etc/sssd/sssd.conf.template
+  [INFO] Create local admin group placeholder
+  [OK] Create local admin group placeholder
+  [WARN] Join de AD e realm permit devem ser feitos conforme dominio real da companhia
+
+[09:48:41] SECTION 20-privilegios
+  [INFO] Lock root password
+  [OK] Lock root password
+  [INFO] Create admin group
+  [OK] Create admin group
+  [INFO] Create dev group placeholder
+  [OK] Create dev group placeholder
+  [INFO] Write /etc/sudoers.d/20-vdi-admins
+  [OK] Wrote /etc/sudoers.d/20-vdi-admins
+  [INFO] Validate vdi sudoers
+  [OK] Validate vdi sudoers
+  [WARN] ENFORCE_DEV_NO_SUDO=false; nao removi usuarios de sudo automaticamente
+  [INFO] Ensure line in /etc/pam.d/su: auth required pam_wheel.so use_uid group=vdi-admins
+  [OK] Line present in /etc/pam.d/su
+  [INFO] Write /etc/polkit-1/rules.d/49-vdi-admins.rules
+  [OK] Wrote /etc/polkit-1/rules.d/49-vdi-admins.rules
+
+[09:48:41] SECTION 30-ssh
+  [INFO] Install OpenSSH server package
+  [OK] Install OpenSSH server package
+  [INFO] Write /etc/ssh/sshd_config.d/90-vdi-hardening.conf
+  [OK] Wrote /etc/ssh/sshd_config.d/90-vdi-hardening.conf
+  [INFO] Validate sshd config
+  [OK] Validate sshd config
+  [INFO] Disable SSH service by default
+  [OK] Disable SSH service by default
+  [WARN] SSH ficou desabilitado. Use ENABLE_SSH=true se suporte operacional exigir.
+
+[09:48:42] SECTION 40-dev-tools
+  [INFO] Install Python/Java/C/C++/AWS/Azure user tooling
+  [FAIL] Install Python/Java/C/C++/AWS/Azure user tooling
+  [INFO] Add Microsoft signing key for Azure CLI
+File '/etc/apt/keyrings/microsoft.gpg' exists. Overwrite? (y/N) y
+  [OK] Add Microsoft signing key for Azure CLI
+  [INFO] Add Azure CLI apt repository
+  [OK] Add Azure CLI apt repository
+  [INFO] Update apt after adding Azure CLI repo
+  [OK] Update apt after adding Azure CLI repo
+  [INFO] Install Azure CLI
+  [OK] Install Azure CLI
+  [INFO] Ensure pipx binary path profile hint
+  [OK] Ensure pipx binary path profile hint
+  [INFO] Write /etc/pip.conf
+  [OK] Wrote /etc/pip.conf
+  [WARN] pip global fica bloqueado por padrao; dev deve usar python3 -m venv ou pipx
+  [WARN] AWS: usar aws sso login ou credenciais STS temporarias; evitar long-lived keys em ~/.aws/credentials
+  [WARN] Azure: usar az login com device flow ou Managed Identity; sem service principal em arquivo local
+
+[09:48:49] SECTION 50-docker-rootless
+  [INFO] Install Docker/rootless dependencies
+  [OK] Install Docker/rootless dependencies
+  [INFO] Disable rootful Docker service and socket
+  [OK] Disable rootful Docker service and socket
+  [INFO] Remove world/group access from rootful Docker socket if present
+  [OK] Remove world/group access from rootful Docker socket if present
+  [INFO] Ensure docker group exists but dev is not a member
+  [OK] Ensure docker group exists but dev is not a member
+  [INFO] Write /etc/profile.d/20-docker-rootless.sh
+  [OK] Wrote /etc/profile.d/20-docker-rootless.sh
+  [INFO] Write /usr/local/sbin/setup-rootless-docker-user
+  [OK] Wrote /usr/local/sbin/setup-rootless-docker-user
+  [WARN] Execute setup-rootless-docker-user <usuario> para cada dev local/AD apos primeiro login
+
+[09:48:50] SECTION 60-filesystem-home
+  [INFO] Set conservative login.defs umask
+  [OK] Set conservative login.defs umask
+  [INFO] Write /etc/profile.d/30-vdi-umask.sh
+  [OK] Wrote /etc/profile.d/30-vdi-umask.sh
+  [INFO] Write /etc/security/limits.d/90-vdi-dev.conf
+  [OK] Wrote /etc/security/limits.d/90-vdi-dev.conf
+  [INFO] Set sticky bit on /tmp
+  [OK] Set sticky bit on /tmp
+  [INFO] Set sticky bit on /var/tmp
+  [OK] Set sticky bit on /var/tmp
+  [WARN] Nao apliquei noexec em /tmp por compatibilidade com Java, IDEs, builds e Citrix (HARDEN_TMP_NOEXEC=false)
+  [INFO] Write /usr/local/sbin/vdi-fix-user-home-perms
+  [OK] Wrote /usr/local/sbin/vdi-fix-user-home-perms
+
+[09:48:50] SECTION 65-audit-shell-inits
+  [INFO] Gerando regras auditd para shell inits de usuarios em /home
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 455: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 463: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 463: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 463: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 463: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 463: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 465: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 466: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 467: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 463: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 463: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 463: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 463: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 463: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 465: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 466: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+./Hardening-Ubuntu-2404-VDI-Desktop-v2.sh: line 467: /etc/audit/rules.d/51-vdi-user-shell-inits.rules: No such file or directory
+chmod: cannot access '/etc/audit/rules.d/51-vdi-user-shell-inits.rules': No such file or directory
+chown: cannot access '/etc/audit/rules.d/51-vdi-user-shell-inits.rules': No such file or directory
+  [OK] Wrote /etc/audit/rules.d/51-vdi-user-shell-inits.rules
+  [INFO] Reload audit rules after shell init additions
+  [FAIL] Reload audit rules after shell init additions
+
+[09:48:50] SECTION 70-kernel-network
+  [INFO] Write /etc/sysctl.d/60-vdi-hardening.conf
+  [OK] Wrote /etc/sysctl.d/60-vdi-hardening.conf
+  [WARN] IPv6 preservado (DISABLE_IPV6=false); deve seguir arquitetura de rede corporativa/Citrix
+  [INFO] Write /etc/modprobe.d/vdi-disable-protocols.conf
+  [OK] Wrote /etc/modprobe.d/vdi-disable-protocols.conf
+  [INFO] Apply sysctl settings
+  [OK] Apply sysctl settings
+  [WARN] Sem UFW egress: controle principal assumido no firewall/proxy corporativo
+
+[09:48:50] SECTION 80-services
+  [INFO] Purge legacy network services
+  [FAIL] Purge legacy network services
+  [INFO] Disable Bluetooth if present
+  [OK] Disable Bluetooth if present
+  [INFO] Disable Avahi if present
+  [OK] Disable Avahi if present
+  [INFO] Disable CUPS if present
+  [OK] Disable CUPS if present
+  [INFO] Mask autofs if present
+  [OK] Mask autofs if present
+  [INFO] Write /etc/modprobe.d/vdi-usb-storage.conf
+  [OK] Wrote /etc/modprobe.d/vdi-usb-storage.conf
+  [WARN] USB redirection principal deve ser controlado por policy Citrix
+  [WARN] Citrix VDA services (ctxvda, ctxhdx, ctxgfx, ctxlogd) nao foram tocados; nao mascarar
+
+[09:48:52] SECTION 90-logs-audit
+  [INFO] Install auditd and rsyslog
+  [OK] Install auditd and rsyslog
+  [INFO] Enable auditd
+  [OK] Enable auditd
+  [INFO] Enable rsyslog
+  [OK] Enable rsyslog
+  [INFO] Write /etc/systemd/journald.conf.d/90-vdi.conf
+  [OK] Wrote /etc/systemd/journald.conf.d/90-vdi.conf
+  [INFO] Restart journald
+  [OK] Restart journald
+  [INFO] Write /etc/audit/rules.d/50-vdi-realista.rules
+  [OK] Wrote /etc/audit/rules.d/50-vdi-realista.rules
+  [INFO] Load audit rules
+  [OK] Load audit rules
+
+[09:48:58] SECTION 99-postcheck
+  [INFO] Write /usr/local/sbin/vdi-hardening-postcheck
+  [OK] Wrote /usr/local/sbin/vdi-hardening-postcheck
+  [INFO] Run postcheck
+  [FAIL] Run postcheck
+
+============================================
+Ubuntu VDI hardening
+Version: 24.04.4 LTS (Noble Numbat)
+Errors:  4
+Logs:    /var/log/ubuntu-vdi-hardening/20260526_093539
+
+Next steps:
+1. Ajustar dominio AD e executar realm join / realm permit.
+2. Confirmar que devs nao pertencem a sudo/admin/docker rootful.
+3. Executar setup-rootless-docker-user <usuario> apos primeiro login de cada dev.
+4. Executar vdi-fix-user-home-perms apos criacao de cada home AD.
+5. Para novos usuarios AD: re-executar configure_audit_shell_inits ou rodar augenrules --load.
+6. Validar Python, Java, C/C++, AWS CLI, Azure CLI, IDE, Citrix e Docker rootless.
+7. Rodar /usr/local/sbin/vdi-hardening-postcheck apos reboot.
+============================================
+
