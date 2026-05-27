@@ -1,0 +1,1008 @@
+#!/usr/bin/env bash
+# Ubuntu 24.04 VDI Desktop hardening - proposta realista para devs sem root.
+# Foco: proteger o SO e deixar o dev trabalhar em Python, Java, C/C++, Docker rootless, AWS e Azure.
+
+set -u
+
+VERSION="2026-05-27-V1.0.0-v4"
+
+# ===== Ajustes do ambiente =====
+DEV_GROUP="${DEV_GROUP:-vdi-devs}"
+ADMIN_GROUP="${ADMIN_GROUP:-vdi-admins}"
+LOG_BASE="${LOG_BASE:-/var/log/ubuntu-vdi-hardening}"
+
+# Controles opcionais. Mantidos conservadores por padrao.
+DRY_RUN="${DRY_RUN:-false}"
+ENABLE_SSH="${ENABLE_SSH:-false}"
+INSTALL_DEV_TOOLS="${INSTALL_DEV_TOOLS:-true}"
+INSTALL_DOCKER_ROOTLESS="${INSTALL_DOCKER_ROOTLESS:-true}"
+DISABLE_ROOTFUL_DOCKER="${DISABLE_ROOTFUL_DOCKER:-true}"
+ALLOW_ROOTFUL_DOCKER_SOCKET_GROUP="${ALLOW_ROOTFUL_DOCKER_SOCKET_GROUP:-false}"
+DOCKER_SOCKET_GROUP="${DOCKER_SOCKET_GROUP:-$DEV_GROUP}"
+PURGE_LEGACY_SERVICES="${PURGE_LEGACY_SERVICES:-true}"
+HARDEN_TMP_NOEXEC="${HARDEN_TMP_NOEXEC:-false}"
+DISABLE_IPV6="${DISABLE_IPV6:-false}"
+ENFORCE_DEV_NO_SUDO="${ENFORCE_DEV_NO_SUDO:-false}"
+DISABLE_JAVA_ATTACH="${DISABLE_JAVA_ATTACH:-false}"
+IDENTITY_INTERACTIVE="${IDENTITY_INTERACTIVE:-true}"
+
+# Valores opcionais para preparar template de AD/SSSD.
+# Se vazio, o item fica manual e o script nao força dominio ficticio.
+AD_DOMAIN="${AD_DOMAIN:-}"
+KRB5_REALM="${KRB5_REALM:-}"
+AD_ADMIN_USER="${AD_ADMIN_USER:-}"
+AD_PERMIT_GROUP="${AD_PERMIT_GROUP:-}"
+
+CURRENT_SECTION="init"
+ERRORS=0
+
+log_dir() {
+    printf '%s/%s\n' "$LOG_BASE" "$(date +%Y%m%d_%H%M%S)"
+}
+
+LOG_DIR="$(log_dir)"
+MANUAL_STEPS_FILE="$LOG_DIR/manual-items.txt"
+
+start_section() {
+    CURRENT_SECTION="$1"
+    mkdir -p "$LOG_DIR/sections/$CURRENT_SECTION"
+    printf '\n[%s] SECTION %s\n' "$(date '+%H:%M:%S')" "$CURRENT_SECTION" | tee -a "$LOG_DIR/main.log"
+}
+
+log_info() {
+    printf '  [INFO] %s\n' "$1" | tee -a "$LOG_DIR/sections/$CURRENT_SECTION/info.log"
+}
+
+log_ok() {
+    printf '  [OK] %s\n' "$1" | tee -a "$LOG_DIR/sections/$CURRENT_SECTION/success.log"
+}
+
+log_warn() {
+    printf '  [WARN] %s\n' "$1" | tee -a "$LOG_DIR/sections/$CURRENT_SECTION/warn.log"
+}
+
+log_fail() {
+    ERRORS=$((ERRORS + 1))
+    printf '  [FAIL] %s\n' "$1" | tee -a "$LOG_DIR/sections/$CURRENT_SECTION/error.log"
+}
+
+manual_step() {
+    local title="$1"
+    local procedure="$2"
+
+    log_warn "MANUAL: $title"
+    printf '  [MANUAL] %s\n' "$procedure" | tee -a "$LOG_DIR/sections/$CURRENT_SECTION/warn.log"
+    {
+        printf '\n[%s]\n' "$title"
+        printf '%s\n' "$procedure"
+    } >> "$MANUAL_STEPS_FILE"
+}
+
+run() {
+    local desc="$1"
+    shift
+
+    log_info "$desc"
+    if [ "$DRY_RUN" = "true" ]; then
+        printf '  [DRY-RUN] %s\n' "$*" | tee -a "$LOG_DIR/sections/$CURRENT_SECTION/commands.log"
+        return 0
+    fi
+
+    if "$@" >>"$LOG_DIR/sections/$CURRENT_SECTION/output.log" 2>&1; then
+        log_ok "$desc"
+        return 0
+    fi
+
+    log_fail "$desc"
+    return 1
+}
+
+run_shell() {
+    local desc="$1"
+    local cmd="$2"
+
+    log_info "$desc"
+    if [ "$DRY_RUN" = "true" ]; then
+        printf '  [DRY-RUN] %s\n' "$cmd" | tee -a "$LOG_DIR/sections/$CURRENT_SECTION/commands.log"
+        return 0
+    fi
+
+    if bash -c "$cmd" >>"$LOG_DIR/sections/$CURRENT_SECTION/output.log" 2>&1; then
+        log_ok "$desc"
+        return 0
+    fi
+
+    log_fail "$desc"
+    return 1
+}
+
+backup_file() {
+    local file="$1"
+    if [ -e "$file" ] && [ "$DRY_RUN" != "true" ]; then
+        cp -a "$file" "$file.vdi-hardening.$(date +%Y%m%d%H%M%S).bak"
+    fi
+}
+
+write_file() {
+    local path="$1"
+    local mode="$2"
+    local owner="$3"
+    local content="$4"
+
+    log_info "Write $path"
+    if [ "$DRY_RUN" = "true" ]; then
+        printf '  [DRY-RUN] write %s mode %s owner %s\n' "$path" "$mode" "$owner" | tee -a "$LOG_DIR/sections/$CURRENT_SECTION/commands.log"
+        return 0
+    fi
+
+    backup_file "$path"
+    install -d -m 0755 "$(dirname "$path")"
+    printf '%s\n' "$content" > "$path"
+    chown "$owner" "$path"
+    chmod "$mode" "$path"
+    log_ok "Wrote $path"
+}
+
+append_unique_line() {
+    local path="$1"
+    local line="$2"
+
+    log_info "Ensure line in $path: $line"
+    if [ "$DRY_RUN" = "true" ]; then
+        printf '  [DRY-RUN] ensure line in %s\n' "$path" | tee -a "$LOG_DIR/sections/$CURRENT_SECTION/commands.log"
+        return 0
+    fi
+
+    touch "$path"
+    if ! grep -Fqx "$line" "$path"; then
+        printf '%s\n' "$line" >> "$path"
+    fi
+    log_ok "Line present in $path"
+}
+
+require_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        printf 'Run as root: sudo %s\n' "$0" >&2
+        exit 1
+    fi
+}
+
+prompt_optional() {
+    local var_name="$1"
+    local prompt="$2"
+    local current_value="${!var_name:-}"
+    local answer
+
+    if [ -n "$current_value" ]; then
+        return 0
+    fi
+
+    if [ "$IDENTITY_INTERACTIVE" != "true" ] || [ ! -t 0 ]; then
+        return 0
+    fi
+
+    printf '%s' "$prompt"
+    read -r answer || answer=""
+    printf -v "$var_name" '%s' "$answer"
+}
+
+init_logging() {
+    mkdir -p "$LOG_DIR/sections"
+    printf 'Ubuntu VDI hardening %s\nStarted: %s\n' "$VERSION" "$(date -Is)" | tee "$LOG_DIR/main.log" >/dev/null
+    printf 'Itens manuais do Ubuntu VDI hardening %s\n' "$VERSION" > "$MANUAL_STEPS_FILE"
+}
+
+check_platform() {
+    start_section "00-platform"
+    if [ -r /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        log_info "Detected ${PRETTY_NAME:-unknown}"
+        if [ "${ID:-}" != "ubuntu" ] || [ "${VERSION_ID:-}" != "24.04" ]; then
+            log_warn "Script desenhado para Ubuntu 24.04; continuar somente em staging/snapshot"
+        fi
+    else
+        log_warn "/etc/os-release ausente"
+    fi
+}
+
+configure_identity_placeholders() {
+    start_section "10-identidade"
+    prompt_optional "AD_DOMAIN" "AD domain (Enter para deixar manual): "
+    prompt_optional "KRB5_REALM" "Kerberos realm (Enter para deixar manual): "
+    prompt_optional "AD_ADMIN_USER" "Usuario admin para realm join (Enter para deixar manual): "
+    prompt_optional "AD_PERMIT_GROUP" "Grupo AD permitido (Enter para deixar manual): "
+
+    run "Install SSSD/realmd packages" env DEBIAN_FRONTEND=noninteractive apt-get install -y realmd sssd sssd-tools libnss-sss libpam-sss adcli krb5-user samba-common-bin
+
+    run "Enable SSSD if configured" systemctl enable sssd
+
+    local sssd_template
+    if [ -n "$AD_DOMAIN" ] && [ -n "$KRB5_REALM" ]; then
+        sssd_template="[sssd]
+services = nss, pam
+domains = $KRB5_REALM
+
+[domain/$KRB5_REALM]
+id_provider = ad
+auth_provider = ad
+access_provider = ad
+ad_domain = $AD_DOMAIN
+krb5_realm = $KRB5_REALM
+ad_gpo_access_control = enforcing
+use_fully_qualified_names = false
+fallback_homedir = /home/%u
+default_shell = /bin/bash
+
+# Revisar DCs/grupos antes de ativar.
+"
+    else
+        sssd_template='[sssd]
+services = nss, pam
+domains = MANUAL.REALM
+
+[domain/MANUAL.REALM]
+id_provider = ad
+auth_provider = ad
+access_provider = ad
+ad_domain = MANUAL.DOMAIN
+krb5_realm = MANUAL.REALM
+ad_gpo_access_control = enforcing
+use_fully_qualified_names = false
+fallback_homedir = /home/%u
+default_shell = /bin/bash
+
+# MANUAL: preencher dominio, realm, DCs e grupos antes de ativar.
+'
+        log_warn "AD_DOMAIN/KRB5_REALM vazios; SSSD ficou somente como template manual"
+    fi
+    write_file "/etc/sssd/sssd.conf.template" "0600" "root:root" "$sssd_template"
+
+    local identity_notes
+    identity_notes="AD/SSSD manual steps
+
+AD_DOMAIN=${AD_DOMAIN:-MANUAL}
+KRB5_REALM=${KRB5_REALM:-MANUAL}
+AD_ADMIN_USER=${AD_ADMIN_USER:-MANUAL}
+AD_PERMIT_GROUP=${AD_PERMIT_GROUP:-MANUAL}
+
+1. Revisar /etc/sssd/sssd.conf.template.
+2. Copiar para /etc/sssd/sssd.conf somente depois de validar dominio/realm.
+3. Executar realm join manualmente quando houver credencial e janela operacional.
+"
+
+    if [ -n "$AD_DOMAIN" ] && [ -n "$AD_ADMIN_USER" ]; then
+        identity_notes="${identity_notes}
+Comando sugerido:
+realm join -U $AD_ADMIN_USER $AD_DOMAIN
+"
+    fi
+
+    if [ -n "$AD_PERMIT_GROUP" ]; then
+        identity_notes="${identity_notes}
+Comando sugerido:
+realm permit -g $AD_PERMIT_GROUP
+"
+    fi
+
+    write_file "/root/vdi-ad-manual-next-steps.txt" "0600" "root:root" "$identity_notes"
+
+    run "Create local admin group placeholder" groupadd -f "$ADMIN_GROUP"
+    manual_step "AD/SSSD" "Para fechar este item: revisar /etc/sssd/sssd.conf.template, copiar para /etc/sssd/sssd.conf somente com dominio/realm reais, executar realm join e depois realm permit conforme /root/vdi-ad-manual-next-steps.txt. Se os prompts ficaram vazios, o item foi pulado de proposito."
+}
+
+configure_privilege_model() {
+    start_section "20-privilegios"
+    run "Lock root password" passwd -l root
+    run "Create admin group" groupadd -f "$ADMIN_GROUP"
+    run "Create dev group placeholder" groupadd -f "$DEV_GROUP"
+
+    local sudoers
+    sudoers="Defaults use_pty
+Defaults logfile=/var/log/sudo.log
+Defaults log_input,log_output
+Defaults env_reset,timestamp_timeout=15
+%$ADMIN_GROUP ALL=(ALL:ALL) ALL
+"
+    write_file "/etc/sudoers.d/20-vdi-admins" "0440" "root:root" "$sudoers"
+    run "Validate vdi sudoers" visudo -cf /etc/sudoers.d/20-vdi-admins
+
+    if [ "$ENFORCE_DEV_NO_SUDO" = "true" ]; then
+        run_shell "Remove members of $DEV_GROUP from sudo group" \
+            "getent group '$DEV_GROUP' | awk -F: '{print \$4}' | tr ',' '\n' | sed '/^$/d' | while read -r u; do gpasswd -d \"\$u\" sudo || true; done"
+    else
+        manual_step "Devs fora do sudo" "Para fechar este item: validar membros com getent group sudo e remover devs com gpasswd -d <usuario> sudo, ou reexecutar com ENFORCE_DEV_NO_SUDO=true quando a lista de usuarios/grupos estiver correta."
+    fi
+
+    if ! grep -Eq '^[[:space:]]*auth[[:space:]]+required[[:space:]]+pam_wheel\.so' /etc/pam.d/su 2>/dev/null; then
+        append_unique_line "/etc/pam.d/su" "auth required pam_wheel.so use_uid group=$ADMIN_GROUP"
+    else
+        log_info "pam_wheel already configured in /etc/pam.d/su"
+    fi
+
+    write_file "/etc/polkit-1/rules.d/49-vdi-admins.rules" "0644" "root:root" "polkit.addAdminRule(function(action, subject) {
+    return [\"unix-group:$ADMIN_GROUP\"];
+});"
+}
+
+configure_ssh() {
+    start_section "30-ssh"
+    run "Install OpenSSH server package" apt-get install -y openssh-server
+
+    local sshd_dropin
+    sshd_dropin='PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+PermitUserEnvironment no
+MaxAuthTries 3
+MaxSessions 2
+LoginGraceTime 60
+ClientAliveInterval 300
+ClientAliveCountMax 2
+LogLevel VERBOSE
+'
+    write_file "/etc/ssh/sshd_config.d/90-vdi-hardening.conf" "0644" "root:root" "$sshd_dropin"
+    run "Validate sshd config" sshd -t
+
+    write_file "/etc/ssh/ssh_config.d/90-vdi-client-hardening.conf" "0644" "root:root" "Host *
+    ForwardAgent no
+    ForwardX11 no
+"
+    run "Validate SSH client config" ssh -G localhost
+
+    if [ "$ENABLE_SSH" = "true" ]; then
+        run "Enable SSH service" systemctl enable --now ssh
+    else
+        run "Disable SSH service by default" systemctl disable --now ssh
+        manual_step "SSH" "SSH ficou desabilitado. Para fechar como habilitado: reexecutar com ENABLE_SSH=true ou rodar systemctl enable --now ssh depois de validar chaves, bastion/VPN e necessidade operacional."
+    fi
+}
+
+install_dev_tools() {
+    start_section "40-dev-tools"
+    if [ "$INSTALL_DEV_TOOLS" != "true" ]; then
+        manual_step "Toolchain dev" "INSTALL_DEV_TOOLS=false. Para fechar este item: instalar toolchain aprovado ou reexecutar com INSTALL_DEV_TOOLS=true."
+        return
+    fi
+
+    run "Install Python/Java/C/C++/AWS/Azure user tooling" apt-get install -y \
+        python3 python3-venv python3-pip pipx \
+        build-essential gcc g++ make gdb \
+        default-jdk maven gradle \
+        git git-lfs curl ca-certificates unzip jq gnupg \
+        awscli
+
+    # Azure CLI via repositorio oficial Microsoft
+    run_shell "Add Microsoft signing key for Azure CLI" \
+        "install -d -m 0755 /etc/apt/keyrings && curl -sLS https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg && chmod 0644 /etc/apt/keyrings/microsoft.gpg"
+    run_shell "Add Azure CLI apt repository" \
+        "echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ noble main' > /etc/apt/sources.list.d/azure-cli.list"
+    run "Update apt after adding Azure CLI repo" apt-get update
+    run "Install Azure CLI" apt-get install -y azure-cli
+
+    write_file "/etc/profile.d/10-user-local-bin.sh" "0644" "root:root" 'case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$PATH:$HOME/.local/bin" ;;
+esac'
+
+    write_file "/etc/profile.d/40-vdi-shell-history.sh" "0644" "root:root" 'HISTCONTROL=ignoreboth
+HISTSIZE=5000
+HISTFILESIZE=10000
+shopt -s histappend 2>/dev/null || true'
+
+    if [ "$DISABLE_JAVA_ATTACH" = "true" ]; then
+        write_file "/etc/profile.d/45-vdi-java-attach.sh" "0644" "root:root" 'case " ${JAVA_TOOL_OPTIONS:-} " in
+    *" -XX:+DisableAttachMechanism "*) ;;
+    *) export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -XX:+DisableAttachMechanism" ;;
+esac'
+    else
+        manual_step "Java attach" "DISABLE_JAVA_ATTACH=false. Para fechar este item: validar impacto em IDE/debug e reexecutar com DISABLE_JAVA_ATTACH=true para aplicar -XX:+DisableAttachMechanism globalmente."
+    fi
+
+    write_file "/etc/pip.conf" "0644" "root:root" "[global]
+require-virtualenv = true
+
+[install]
+user = false
+"
+    manual_step "Python/pip" "Pip global ficou bloqueado. Para fechar este item com o dev: usar python3 -m venv por projeto ou pipx para CLIs."
+    manual_step "AWS" "Para fechar este item com o dev: usar aws sso login ou credenciais STS temporarias. Evitar access keys long-lived em ~/.aws/credentials."
+    manual_step "Azure" "Para fechar este item com o dev: usar az login com device flow ou Managed Identity. Nao gravar service principal local permanente."
+}
+
+configure_docker_rootless() {
+    start_section "50-docker-rootless"
+    if [ "$INSTALL_DOCKER_ROOTLESS" != "true" ]; then
+        manual_step "Docker rootless" "INSTALL_DOCKER_ROOTLESS=false. Para fechar este item: reexecutar com INSTALL_DOCKER_ROOTLESS=true ou instalar Docker rootless conforme padrao aprovado."
+        return
+    fi
+
+    run "Install Docker/rootless dependencies" apt-get install -y \
+        docker.io docker-buildx uidmap slirp4netns fuse-overlayfs dbus-user-session rootlesskit acl
+
+    run "Create Docker socket control group" groupadd -f "$DOCKER_SOCKET_GROUP"
+
+    if [ "$DISABLE_ROOTFUL_DOCKER" = "true" ]; then
+        run "Disable rootful Docker service and socket" systemctl disable --now docker.service docker.socket
+        run "Remove world/group access from rootful Docker socket if present" \
+            bash -c 'if [ -S /var/run/docker.sock ]; then chown root:root /var/run/docker.sock && chmod 0600 /var/run/docker.sock; fi'
+    else
+        if [ "$ALLOW_ROOTFUL_DOCKER_SOCKET_GROUP" = "true" ]; then
+            write_file "/etc/systemd/system/docker.socket.d/10-vdi-socket-group.conf" "0644" "root:root" "[Socket]
+SocketGroup=$DOCKER_SOCKET_GROUP
+SocketMode=0660
+"
+            run "Reload systemd for Docker socket override" systemctl daemon-reload
+            run "Enable controlled Docker socket" systemctl enable --now docker.socket
+            run "Apply Docker socket group if socket exists" \
+                bash -c "if [ -S /var/run/docker.sock ]; then chgrp '$DOCKER_SOCKET_GROUP' /var/run/docker.sock && chmod 0660 /var/run/docker.sock; fi"
+            manual_step "Docker rootful por grupo" "Rootful Docker liberado somente para o grupo $DOCKER_SOCKET_GROUP. Para fechar este item: VDI/Citrix deve informar o grupo real aprovado; adicionar apenas usuarios autorizados e validar que nao ha membro indevido no grupo docker."
+        else
+            manual_step "Docker rootful" "DISABLE_ROOTFUL_DOCKER=false sem grupo aprovado. Para fechar: usar Docker rootless, reexecutar com DISABLE_ROOTFUL_DOCKER=true ou informar DOCKER_SOCKET_GROUP=<grupo> ALLOW_ROOTFUL_DOCKER_SOCKET_GROUP=true."
+        fi
+    fi
+
+    run_shell "Ensure docker group exists but dev is not a member" \
+        "getent group docker >/dev/null || groupadd docker"
+
+    write_file "/etc/profile.d/20-docker-rootless.sh" "0644" "root:root" 'if [ -n "$UID" ] && [ -S "/run/user/$UID/docker.sock" ]; then
+    export DOCKER_HOST="unix:///run/user/$UID/docker.sock"
+fi'
+
+    write_file "/usr/local/sbin/setup-rootless-docker-user" "0750" "root:root" '#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Run as root: setup-rootless-docker-user <username>" >&2
+    exit 1
+fi
+
+if [ "$#" -ne 1 ]; then
+    echo "Usage: setup-rootless-docker-user <username>" >&2
+    exit 1
+fi
+
+user="$1"
+home_dir="$(getent passwd "$user" | cut -d: -f6)"
+uid="$(id -u "$user")"
+
+if [ -z "$home_dir" ] || [ ! -d "$home_dir" ]; then
+    echo "User home not found for $user" >&2
+    exit 1
+fi
+
+loginctl enable-linger "$user"
+
+if command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
+    runuser -l "$user" -c "dockerd-rootless-setuptool.sh install"
+else
+    echo "dockerd-rootless-setuptool.sh not found. Install Docker rootless package/tooling first." >&2
+    exit 1
+fi
+
+runuser -l "$user" -c "systemctl --user enable --now docker"
+echo "Rootless Docker configured for $user at unix:///run/user/$uid/docker.sock"
+'
+
+    manual_step "Setup por usuario do Docker rootless" "Para fechar este item: apos o primeiro login de cada dev, rodar setup-rootless-docker-user <usuario> como root e validar docker context com DOCKER_HOST=unix:///run/user/<uid>/docker.sock."
+}
+
+configure_filesystem_and_home() {
+    start_section "60-filesystem-home"
+
+    # --- umask ---
+    run "Set conservative login.defs umask" sed -i 's/^UMASK.*/UMASK 077/' /etc/login.defs
+    write_file "/etc/profile.d/30-vdi-umask.sh" "0644" "root:root" 'umask 027'
+
+    # --- resource limits ---
+    write_file "/etc/security/limits.d/90-vdi-dev.conf" "0644" "root:root" "# VDI dev resource limits
+*    hard core     0
+*    soft nproc    4096
+*    hard nproc    8192
+*    soft nofile   4096
+*    hard nofile   65535
+*    soft fsize    4194304
+*    hard fsize    8388608
+"
+
+    # --- /tmp /var/tmp sticky ---
+    run "Set sticky bit on /tmp" chmod 1777 /tmp
+    run "Set sticky bit on /var/tmp" chmod 1777 /var/tmp
+
+    if [ "$HARDEN_TMP_NOEXEC" = "true" ]; then
+        run_shell "Mask default tmp.mount before fstab override" \
+            "systemctl mask tmp.mount >/dev/null 2>&1 || true"
+        manual_step "/tmp noexec" "HARDEN_TMP_NOEXEC=true. Para fechar este item: ajustar /etc/fstab conforme particionamento real, montar /tmp com noexec,nodev,nosuid e testar Java, IDEs, builds, Citrix e Docker rootless antes de producao."
+    else
+        manual_step "/tmp noexec" "HARDEN_TMP_NOEXEC=false. Item aceito como excecao de compatibilidade. Para fechar tecnicamente: validar impacto e reexecutar com HARDEN_TMP_NOEXEC=true somente se Java, IDEs, builds, Citrix e Docker rootless passarem."
+    fi
+
+    # --- helper: fix home permissions (inclui cloud e caches dev) ---
+    write_file "/usr/local/sbin/vdi-fix-user-home-perms" "0750" "root:root" '#!/usr/bin/env bash
+# Corrige permissoes de home e diretorios sensiveis de cada usuario em /home.
+# Inclui: .ssh, .aws, .azure, .oci, .docker, .cache, .local, .m2, .gradle, .npm, .yarn, .config/yarn
+set -euo pipefail
+
+for home_dir in /home/*; do
+    [ -d "$home_dir" ] || continue
+    user="$(basename "$home_dir")"
+    id "$user" >/dev/null 2>&1 || continue
+
+    chown "$user:$user" "$home_dir"
+    chmod 0750 "$home_dir"
+
+    for dir in .ssh .aws .azure .oci .docker .cache .local .m2 .gradle .npm .yarn .config/yarn; do
+        target="$home_dir/$dir"
+        if [ -d "$target" ]; then
+            chown -R "$user:$user" "$target"
+            chmod 0700 "$target"
+        fi
+    done
+
+    # Chaves SSH: arquivos 600
+    if [ -d "$home_dir/.ssh" ]; then
+        find "$home_dir/.ssh" -type f -exec chmod 0600 {} +
+    fi
+
+    # Credenciais AWS: arquivos 600
+    if [ -d "$home_dir/.aws" ]; then
+        find "$home_dir/.aws" -type f -exec chmod 0600 {} +
+    fi
+
+    # Credenciais Azure: arquivos 600
+    if [ -d "$home_dir/.azure" ]; then
+        find "$home_dir/.azure" -type f -exec chmod 0600 {} +
+    fi
+
+    # Credenciais OCI: arquivos 600
+    if [ -d "$home_dir/.oci" ]; then
+        find "$home_dir/.oci" -type f -exec chmod 0600 {} +
+    fi
+
+    for f in .npmrc .yarnrc .git-credentials; do
+        if [ -f "$home_dir/$f" ]; then
+            chown "$user:$user" "$home_dir/$f"
+            chmod 0600 "$home_dir/$f"
+        fi
+    done
+
+    # .netrc: se existir deve ser 600
+    if [ -f "$home_dir/.netrc" ]; then
+        chown "$user:$user" "$home_dir/.netrc"
+        chmod 0600 "$home_dir/.netrc"
+    fi
+done
+
+echo "Home permissions fixed."
+'
+}
+
+configure_dev_guardrails() {
+    start_section "62-dev-guardrails"
+
+    write_file "/usr/local/sbin/vdi-scan-dev-secrets" "0750" "root:root" '#!/usr/bin/env bash
+set -euo pipefail
+
+pattern="(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AZURE_CLIENT_SECRET|OCI_CLI_KEY_CONTENT|PRIVATE KEY|password[[:space:]]*=|token[[:space:]]*=|secret[[:space:]]*=)"
+status=0
+
+while IFS= read -r -d "" file; do
+    if grep -EIn "$pattern" "$file" 2>/dev/null; then
+        status=1
+    fi
+done < <(find /home -type f \( -name ".env" -o -name ".env.*" -o -name "docker-compose.yml" -o -name "docker-compose.yaml" -o -name ".bashrc" -o -name ".profile" -o -name ".zshrc" \) -print0 2>/dev/null)
+
+exit "$status"
+'
+
+    write_file "/usr/local/sbin/vdi-scan-python-venvs" "0750" "root:root" '#!/usr/bin/env bash
+set -euo pipefail
+
+status=0
+while IFS= read -r -d "" cfg; do
+    if grep -Eiq "^[[:space:]]*include-system-site-packages[[:space:]]*=[[:space:]]*true" "$cfg"; then
+        printf "%s\n" "$cfg"
+        status=1
+    fi
+done < <(find /home -type f -name pyvenv.cfg -print0 2>/dev/null)
+
+exit "$status"
+'
+
+    write_file "/usr/local/sbin/vdi-scan-git-credential-store" "0750" "root:root" '#!/usr/bin/env bash
+set -euo pipefail
+
+status=0
+while IFS= read -r -d "" cfg; do
+    if git config --file "$cfg" --get-all credential.helper 2>/dev/null | grep -Eq "(^|[[:space:]])store($|[[:space:]])"; then
+        printf "%s\n" "$cfg"
+        status=1
+    fi
+done < <(find /home -type f -name .gitconfig -print0 2>/dev/null)
+
+exit "$status"
+'
+
+    run "Fix home/cloud/dev cache permissions" /usr/local/sbin/vdi-fix-user-home-perms
+    run_shell "Scan dev secrets advisory report" "/usr/local/sbin/vdi-scan-dev-secrets > '$LOG_DIR/dev-secrets-findings.txt' 2>&1 || true"
+    run_shell "Scan Python venv system-site-packages advisory report" "/usr/local/sbin/vdi-scan-python-venvs > '$LOG_DIR/python-venv-findings.txt' 2>&1 || true"
+    run_shell "Scan git credential.helper store advisory report" "/usr/local/sbin/vdi-scan-git-credential-store > '$LOG_DIR/git-credential-helper-findings.txt' 2>&1 || true"
+
+    manual_step "Secrets em home/dev" "Revisar $LOG_DIR/dev-secrets-findings.txt. Remover segredos de .env, shell init e docker-compose; usar vault, SSO, STS ou secret manager corporativo."
+    manual_step "Python venv" "Revisar $LOG_DIR/python-venv-findings.txt. Venv com include-system-site-packages=true deve ser recriado sem --system-site-packages."
+    manual_step "Git credential helper" "Revisar $LOG_DIR/git-credential-helper-findings.txt. credential.helper=store deve ser removido; usar SSO/token manager aprovado."
+    manual_step "OCI" "Para fechar OCI: instalar OCI CLI conforme repositorio aprovado e usar ~/.oci com permissao 700/600. Evitar chave permanente local quando houver alternativa corporativa."
+    manual_step "npm/yarn" "Caches ~/.npm, ~/.yarn e ~/.config/yarn ficam 700. Para fechar supply chain: usar registry corporativo, lockfiles e revisao de pacotes globais."
+}
+
+configure_audit_shell_inits() {
+    start_section "65-audit-shell-inits"
+    # auditd nao expande ~ em paths; precisamos de regras por home existente.
+    # O bloco abaixo emite regras para homes presentes no momento do hardening.
+    # Para novos usuarios AD, re-executar este bloco ou rodar vdi-fix-user-home-perms + augenrules.
+
+    log_info "Gerando regras auditd para shell inits de usuarios em /home"
+
+    if [ "$DRY_RUN" = "true" ]; then
+        log_info "[DRY-RUN] Pulando geracao de regras de shell init"
+        return 0
+    fi
+
+    local rules_file="/etc/audit/rules.d/51-vdi-user-shell-inits.rules"
+    : > "$rules_file"
+
+    for home_dir in /home/*; do
+        [ -d "$home_dir" ] || continue
+        user="$(basename "$home_dir")"
+        id "$user" >/dev/null 2>&1 || continue
+
+        for f in .bashrc .bash_profile .profile .zshrc .bash_logout .env .env.local docker-compose.yml docker-compose.yaml .gitconfig .npmrc .yarnrc; do
+            [ -e "$home_dir/$f" ] || continue
+            printf -- '-w %s/%s -p wa -k user_dev_surface\n' "$home_dir" "$f" >> "$rules_file"
+        done
+        for d in .ssh .aws .azure .oci .npm .yarn .config/yarn; do
+            [ -d "$home_dir/$d" ] || continue
+            printf -- '-w %s/%s -p wa -k user_dev_surface\n' "$home_dir" "$d" >> "$rules_file"
+        done
+    done
+
+    chmod 0640 "$rules_file"
+    chown root:root "$rules_file"
+    log_ok "Wrote $rules_file"
+
+    run "Reload audit rules after shell init additions" augenrules --load
+}
+
+configure_kernel_network() {
+    start_section "70-kernel-network"
+    write_file "/etc/sysctl.d/60-vdi-hardening.conf" "0644" "root:root" "# VDI Hardening - kernel e rede
+kernel.randomize_va_space = 2
+kernel.yama.ptrace_scope = 1
+kernel.dmesg_restrict = 1
+kernel.kptr_restrict = 2
+kernel.unprivileged_bpf_disabled = 1
+kernel.perf_event_paranoid = 3
+fs.suid_dumpable = 0
+net.ipv4.ip_forward = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.tcp_syncookies = 1
+"
+
+    if [ "$DISABLE_IPV6" = "true" ]; then
+        append_unique_line "/etc/sysctl.d/60-vdi-hardening.conf" "net.ipv6.conf.all.disable_ipv6 = 1"
+        append_unique_line "/etc/sysctl.d/60-vdi-hardening.conf" "net.ipv6.conf.default.disable_ipv6 = 1"
+        manual_step "IPv6" "IPv6 foi desabilitado. Para fechar este item: validar com rede/Citrix e confirmar que DNS, VDA, proxy e rotas corporativas continuam funcionais."
+    else
+        manual_step "IPv6" "IPv6 preservado. Para fechar este item: documentar que a arquitetura de rede/Citrix exige IPv6 ou reexecutar com DISABLE_IPV6=true apos validacao."
+    fi
+
+    write_file "/etc/modprobe.d/vdi-disable-protocols.conf" "0644" "root:root" "# Protocolos de rede nao usados
+install dccp /bin/false
+install sctp /bin/false
+install rds /bin/false
+install tipc /bin/false
+
+# Filesystems nao usados
+install cramfs /bin/false
+install freevxfs /bin/false
+install jffs2 /bin/false
+install hfs /bin/false
+install hfsplus /bin/false
+install squashfs /bin/false
+
+# Dispositivos locais fora do padrao VDI
+install usb_storage /bin/false
+install firewire_core /bin/false
+install thunderbolt /bin/false
+"
+    run "Apply sysctl settings" sysctl --system
+    manual_step "Rede corporativa" "Sem firewall local por padrao. Para fechar este item: documentar firewall/proxy corporativo, VDI/Citrix e rotas permitidas fora da VM."
+}
+
+configure_services() {
+    start_section "80-services"
+    if [ "$PURGE_LEGACY_SERVICES" = "true" ]; then
+        run "Purge legacy network services" apt-get purge -y \
+            telnetd inetutils-telnet rsh-client rsh-server rlogin talk talkd tftpd-hpa vsftpd \
+            nfs-kernel-server rpcbind samba slapd postfix || true
+    fi
+
+    run "Disable Bluetooth if present" systemctl disable --now bluetooth || true
+    run "Disable Avahi if present" systemctl disable --now avahi-daemon || true
+    run "Disable CUPS if present" systemctl disable --now cups || true
+    run "Mask autofs if present" systemctl mask autofs || true
+
+    write_file "/etc/modprobe.d/vdi-usb-storage.conf" "0644" "root:root" "install usb_storage /bin/false
+blacklist usb_storage
+install firewire_core /bin/false
+blacklist firewire_core
+install thunderbolt /bin/false
+blacklist thunderbolt
+"
+    manual_step "USB redirection" "Para fechar este item: controlar USB redirection por policy Citrix e validar que storage USB nao fica disponivel localmente quando proibido."
+    manual_step "Citrix audio redirection" "Para fechar este item: decidir com VDI/Citrix se audio redirect sera permitido. Se nao for necessario, bloquear por policy Citrix."
+    manual_step "Citrix VDA services" "Para fechar este item: manter ctxvda, ctxhdx, ctxgfx e ctxlogd conforme baseline Citrix; nao mascarar estes servicos no hardening do SO."
+}
+
+configure_logging_audit() {
+    start_section "90-logs-audit"
+    run "Install auditd and rsyslog" apt-get install -y auditd audispd-plugins rsyslog
+    run "Enable auditd" systemctl enable auditd
+    run "Enable rsyslog" systemctl enable --now rsyslog
+    run "Ensure Docker socket audit path exists" install -d -m 0755 /etc/systemd/system/docker.socket.d
+
+    write_file "/etc/systemd/journald.conf.d/90-vdi.conf" "0644" "root:root" "[Journal]
+Storage=persistent
+SystemMaxUse=250M
+SystemKeepFree=100M
+Compress=yes
+"
+    run "Restart journald" systemctl restart systemd-journald
+
+    write_file "/etc/audit/rules.d/50-vdi-realista.rules" "0640" "root:root" "-D
+-b 8192
+-f 1
+# Identidade
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+# Privilegios
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d/ -p wa -k sudoers
+-w /etc/pam.d/ -p wa -k pam
+# SSH
+-w /etc/ssh/sshd_config -p wa -k sshd
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd
+-w /etc/ssh/ssh_config -p wa -k ssh_client
+-w /etc/ssh/ssh_config.d/ -p wa -k ssh_client
+# SSSD/AD
+-w /etc/sssd/ -p wa -k sssd
+# APT sources
+-w /etc/apt/sources.list -p wa -k apt_sources
+-w /etc/apt/sources.list.d/ -p wa -k apt_sources
+-w /etc/apt/keyrings/ -p wa -k apt_sources
+# Docker e profiles dev
+-w /etc/systemd/system/docker.socket.d/ -p wa -k docker_socket
+-w /etc/profile.d/ -p wa -k profile_dev
+# Boot
+-w /boot/ -p wa -k boot
+# Comandos privilegiados
+-w /usr/bin/sudo -p x -k sudo_exec
+-w /bin/su -p x -k su_exec
+# Modulos de kernel
+-w /usr/sbin/modprobe -p x -k kernel_module
+-w /usr/sbin/insmod -p x -k kernel_module
+-w /usr/sbin/rmmod -p x -k kernel_module
+-a always,exit -F arch=b64 -S init_module,delete_module,finit_module -k kernel_module
+-a always,exit -F arch=b32 -S init_module,delete_module,finit_module -k kernel_module
+# Comandos executados como root
+-a always,exit -F arch=b64 -S execve -F euid=0 -k rootcmd
+-a always,exit -F arch=b32 -S execve -F euid=0 -k rootcmd
+"
+    run "Load audit rules" augenrules --load
+}
+
+write_postcheck() {
+    start_section "99-postcheck"
+write_file "/usr/local/sbin/vdi-hardening-postcheck" "0750" "root:root" '#!/usr/bin/env bash
+# Postcheck: valida controles criticos apos hardening e reboot.
+set -u
+
+DEV_GROUP="${DEV_GROUP:-vdi-devs}"
+ADMIN_GROUP="${ADMIN_GROUP:-vdi-admins}"
+DOCKER_SOCKET_GROUP="${DOCKER_SOCKET_GROUP:-$DEV_GROUP}"
+CURRENT_USER="${SUDO_USER:-$(id -un)}"
+
+PASS=0
+FAIL=0
+
+ok()   { printf "  [OK]   %s\n" "$1"; PASS=$((PASS+1)); }
+fail() { printf "  [FAIL] %s\n" "$1"; FAIL=$((FAIL+1)); }
+info() { printf "  [INFO] %s\n" "$1"; }
+
+echo
+echo "=== 1. Identidade e grupos ==="
+getent group "$DEV_GROUP"  >/dev/null 2>&1 && ok  "grupo $DEV_GROUP existe"   || fail "grupo $DEV_GROUP ausente"
+getent group "$ADMIN_GROUP" >/dev/null 2>&1 && ok  "grupo $ADMIN_GROUP existe" || fail "grupo $ADMIN_GROUP ausente"
+
+echo
+echo "=== 2. Root e sudo ==="
+passwd -S root 2>/dev/null | grep -q " L " && ok "root bloqueado" || fail "root NAO bloqueado"
+test -f /etc/sudoers.d/20-vdi-admins && visudo -cf /etc/sudoers.d/20-vdi-admins >/dev/null 2>&1 \
+    && ok "sudoers vdi-admins valido" || fail "sudoers vdi-admins invalido ou ausente"
+getent group sudo | grep -qE ":(.*,)?$CURRENT_USER(,|$)" 2>/dev/null \
+    && fail "usuario atual ainda no grupo sudo" || ok "usuario atual fora do grupo sudo"
+
+echo
+echo "=== 3. SSH ==="
+sshd -t >/dev/null 2>&1 && ok "sshd config valida" || fail "sshd config invalida"
+ssh -G localhost 2>/dev/null | grep -qi "^forwardagent no" \
+    && ok "SSH client ForwardAgent no" || fail "SSH client ForwardAgent nao esta no"
+systemctl is-enabled ssh >/dev/null 2>&1 && info "SSH habilitado (esperado se ENABLE_SSH=true)" \
+    || ok "SSH desabilitado (padrao)"
+
+echo
+echo "=== 4. Kernel ==="
+check_sysctl() {
+    local key="$1" expected="$2"
+    local val
+    val=$(sysctl -n "$key" 2>/dev/null)
+    if [ "$val" = "$expected" ]; then
+        ok "$key = $val"
+    else
+        fail "$key = $val (esperado $expected)"
+    fi
+}
+check_sysctl kernel.randomize_va_space 2
+check_sysctl kernel.yama.ptrace_scope 1
+check_sysctl kernel.dmesg_restrict 1
+check_sysctl kernel.kptr_restrict 2
+check_sysctl fs.suid_dumpable 0
+check_sysctl net.ipv4.ip_forward 0
+
+echo
+echo "=== 5. Logs e auditoria ==="
+systemctl is-active auditd >/dev/null 2>&1  && ok "auditd ativo"    || fail "auditd inativo"
+systemctl is-enabled auditd >/dev/null 2>&1 && ok "auditd enabled"  || fail "auditd nao habilitado no boot"
+systemctl is-active rsyslog >/dev/null 2>&1 && ok "rsyslog ativo"   || fail "rsyslog inativo"
+journalctl --disk-usage >/dev/null 2>&1     && ok "journald persistente" || fail "journald nao persistente"
+
+echo
+echo "=== 6. Docker ==="
+if systemctl is-enabled docker.socket >/dev/null 2>&1; then
+    if [ -S /var/run/docker.sock ] && [ "$(stat -c "%G:%a" /var/run/docker.sock 2>/dev/null)" = "$DOCKER_SOCKET_GROUP:660" ]; then
+        ok "docker.socket rootful restrito ao grupo $DOCKER_SOCKET_GROUP"
+    else
+        fail "docker.socket rootful habilitado sem grupo/mode esperado"
+    fi
+else
+    ok "docker.socket rootful desabilitado"
+fi
+systemctl is-enabled docker.service >/dev/null 2>&1 \
+    && info "docker.service rootful habilitado; aceitavel apenas com socket restrito e aprovacao formal" || ok "docker.service rootful desabilitado"
+docker_members="$(getent group docker 2>/dev/null | cut -d: -f4)"
+[ -n "$docker_members" ] \
+    && fail "grupo docker tem membros: $docker_members" || ok "grupo docker vazio"
+getent group "$DOCKER_SOCKET_GROUP" >/dev/null 2>&1 \
+    && ok "grupo de socket Docker existe: $DOCKER_SOCKET_GROUP" || info "grupo de socket Docker nao existe: $DOCKER_SOCKET_GROUP"
+
+echo
+echo "=== 7. Permissoes de home ==="
+for home_dir in /home/*; do
+    [ -d "$home_dir" ] || continue
+    user="$(basename "$home_dir")"
+    id "$user" >/dev/null 2>&1 || continue
+    perm=$(stat -c "%a" "$home_dir")
+    case "$perm" in
+        700|750) ok "home $user perm $perm" ;;
+        *)       fail "home $user perm $perm (esperado 700 ou 750)" ;;
+    esac
+    for cred_dir in .ssh .aws .azure .oci .npm .yarn .config/yarn; do
+        if [ -d "$home_dir/$cred_dir" ]; then
+            dp=$(stat -c "%a" "$home_dir/$cred_dir")
+            [ "$dp" = "700" ] && ok "$user/$cred_dir = 700" || fail "$user/$cred_dir = $dp (esperado 700)"
+        fi
+    done
+done
+
+echo
+echo "=== 8. umask e limites ==="
+grep -q "umask 027" /etc/profile.d/30-vdi-umask.sh 2>/dev/null \
+    && ok "umask 027 configurado" || fail "umask 027 ausente em /etc/profile.d/"
+grep -q "PATH=\"\$PATH:\$HOME/.local/bin\"" /etc/profile.d/10-user-local-bin.sh 2>/dev/null \
+    && ok "PATH nao prioriza ~/.local/bin" || fail "PATH pode priorizar binario no home"
+grep -q "HISTCONTROL=ignoreboth" /etc/profile.d/40-vdi-shell-history.sh 2>/dev/null \
+    && ok "historico shell protegido" || fail "historico shell sem HISTCONTROL"
+grep -q "hard core" /etc/security/limits.d/90-vdi-dev.conf 2>/dev/null \
+    && ok "core dump desabilitado via limits.d" || fail "limite core ausente"
+grep -q "hard nproc" /etc/security/limits.d/90-vdi-dev.conf 2>/dev/null \
+    && ok "nproc limit configurado" || fail "nproc limit ausente"
+
+echo
+echo "=== 9. Azure e AWS CLI ==="
+command -v az      >/dev/null 2>&1 && ok "azure-cli instalado" || info "azure-cli nao encontrado (INSTALL_DEV_TOOLS?)"
+command -v aws     >/dev/null 2>&1 && ok "aws-cli instalado"   || info "aws-cli nao encontrado (INSTALL_DEV_TOOLS?)"
+
+echo
+echo "=== 10. Guardrails dev ==="
+command -v vdi-scan-dev-secrets >/dev/null 2>&1 && ok "scanner de secrets instalado" || fail "scanner de secrets ausente"
+command -v vdi-scan-python-venvs >/dev/null 2>&1 && ok "scanner de venv instalado" || fail "scanner de venv ausente"
+command -v vdi-scan-git-credential-store >/dev/null 2>&1 && ok "scanner git credential instalado" || fail "scanner git credential ausente"
+modprobe -n -v usb_storage 2>/dev/null | grep -Eq "/bin/(true|false)" && ok "usb_storage bloqueado" || fail "usb_storage nao bloqueado"
+modprobe -n -v firewire_core 2>/dev/null | grep -Eq "/bin/(true|false)" && ok "firewire_core bloqueado" || info "firewire_core nao disponivel ou nao bloqueado"
+modprobe -n -v thunderbolt 2>/dev/null | grep -Eq "/bin/(true|false)" && ok "thunderbolt bloqueado" || info "thunderbolt nao disponivel ou nao bloqueado"
+
+echo
+echo "=== 11. Portas em escuta ==="
+info "Portas TCP em escuta (verificar se sao esperadas):"
+ss -lntp 2>/dev/null | tail -n +2 | while read -r line; do info "  $line"; done
+
+echo
+echo "============================================"
+printf "Postcheck concluido: %s OK, %s FAIL\n" "$PASS" "$FAIL"
+echo "============================================"
+if [ "$FAIL" -gt 0 ]; then
+    echo "Acoes manuais necessarias: revisar os itens [FAIL] acima."
+    exit 1
+fi
+'
+    run "Run postcheck" /usr/local/sbin/vdi-hardening-postcheck
+}
+
+main() {
+    require_root
+    init_logging
+    check_platform
+
+    start_section "01-apt"
+    run "Update apt metadata" apt-get update
+
+    configure_identity_placeholders
+    configure_privilege_model
+    configure_ssh
+    install_dev_tools
+    configure_docker_rootless
+    configure_filesystem_and_home
+    configure_dev_guardrails
+    configure_kernel_network
+    configure_services
+    configure_logging_audit
+    configure_audit_shell_inits      # auditoria de shell inits com paths absolutos
+    write_postcheck
+
+    printf '\n============================================\n'
+    printf 'Ubuntu VDI hardening\n'
+    printf 'Version: %s\n' "$VERSION"
+    printf 'Errors:  %d\n' "$ERRORS"
+    printf 'Logs:    %s\n' "$LOG_DIR"
+    printf 'Manual:  %s\n' "$MANUAL_STEPS_FILE"
+    printf '\nNext steps:\n'
+    printf '1. Revisar itens manuais em %s.\n' "$MANUAL_STEPS_FILE"
+    printf '2. Confirmar que devs nao pertencem a sudo/admin/docker rootful. Se rootful for excecao, informar DOCKER_SOCKET_GROUP e usar ALLOW_ROOTFUL_DOCKER_SOCKET_GROUP=true.\n'
+    printf '3. Executar setup-rootless-docker-user <usuario> apos primeiro login de cada dev.\n'
+    printf '4. Executar vdi-fix-user-home-perms apos criacao de cada home AD.\n'
+    printf '5. Para novos usuarios AD: re-executar configure_audit_shell_inits ou rodar augenrules --load.\n'
+    printf '6. Revisar findings de secrets, venv e git credential helper no diretorio de log.\n'
+    printf '7. Validar Python, Java, C/C++, AWS CLI, Azure CLI, IDE, Citrix e Docker rootless.\n'
+    printf '8. Rodar /usr/local/sbin/vdi-hardening-postcheck apos reboot.\n'
+    printf '============================================\n'
+
+    if [ "$ERRORS" -gt 0 ]; then
+        exit 1
+    fi
+}
+
+main "$@"
